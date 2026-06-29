@@ -1,0 +1,38 @@
+name: skyline_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - embree
+  - tbb-devel
+  - cython
+  - setuptools
+  - numpy
+  - scipy
+  - geographiclib
+  - tqdm
+  - requests
+  - xarray
+  - netcdf4
+  - matplotlib
+  - pillow
+  - skyfield
+  - pyproj
+  - ipython
+  - shapely
+  - fiona
+  - scikit-image
+  - rasterio
+  - trimesh
+  - matplotlib
+  - pyproj
+  - opencv
+  - dem_stitcher
+  - jupyterlab
+  - torch
+  - torchvision
+  - segmentation_models_pytorch
+  - pyrender
+  - pillow
+  - ctypes
+  - timm
