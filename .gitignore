@@ -1,1 +1,6 @@
-data/
+__pycache__
+HORAYZON
+data
+.ipynb_checkpoints
+.virtual_documents
+tmp/
