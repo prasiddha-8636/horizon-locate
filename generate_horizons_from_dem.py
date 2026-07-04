@@ -10,9 +10,9 @@ and generates three horizon databases at different search radii:
   - Restricted: 3 km (fine matching)
 
 Output files:
-  - data/horizon_db_global.npy (4920 × 1440)
-  - data/horizon_db_local.npy (4920 × 1440)
-  - data/horizon_db_restricted.npy (4920 × 1440)
+  - data/digital_elevation_model/digital_elevation_model/horizon_database/global.npy (4920 × 1440)
+  - data/digital_elevation_model/digital_elevation_model/horizon_database/local.npy (4920 × 1440)
+  - data/digital_elevation_model/horizon_database/restricted.npy (4920 × 1440)
 
 Each row = horizon profile from one viewpoint
 Each column = elevation angle at 0.25° azimuth resolution (0-359.75°)
@@ -61,7 +61,7 @@ NUM_RAYS = int(360.0 / AZIMUTH_RESOLUTION)  # 1440 rays per viewpoint
 CAMERA_HEIGHT_M = 1.8  # Virtual camera height above ground
 VERTICAL_ACCURACY = 0.1  # Vertical accuracy in degrees
 
-DEM_PATH = "data/dem.tif"
+DEM_PATH = "data/digital_elevation_model/dem.tif"
 
 
 # ============================================================================
@@ -311,7 +311,7 @@ def main():
         )
         
         # Save to disk
-        output_path = f"data/horizon_db_{tier_name}.npy"
+        output_path = f"data/digital_elevation_model/horizon_database/{tier_name}.npy"
         np.save(output_path, horizon_angles)
         
         file_size_mb = os.path.getsize(output_path) / (1024**2)
@@ -320,7 +320,7 @@ def main():
     # Step 5: Verify outputs
     print("\n[5/5] Verifying outputs...")
     for tier_name in MAX_SEARCH_RADII.keys():
-        path = f"data/horizon_db_{tier_name}.npy"
+        path = f"data/digital_elevation_model/horizon_database/{tier_name}.npy"
         if os.path.exists(path):
             data = np.load(path)
             print(f"  ✓ {tier_name:12s}: {data.shape} → {data.dtype}")
@@ -332,7 +332,7 @@ def main():
     print("="*70)
     print("""
 Next steps:
-  1. Download all horizon_db_*.npy files to your local machine
+  1. Download all data/digital_elevation_model/horizon_database/*.npy files to your local machine
   2. Place in data/ directory
   3. Run: python unified_evaluation_pipeline.py --mode diagnose
   4. Run: python unified_evaluation_pipeline.py --mode evaluate --limit 50
