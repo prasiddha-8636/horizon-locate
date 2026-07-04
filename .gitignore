@@ -1,7 +1,12 @@
 __pycache__
 HORAYZON
-data
 .ipynb_checkpoints
 .virtual_documents
 lessons.md
 tmp/
+data/clouds
+data/digital_elevation_model
+data/geopose3k
+data/satellite_imagery
+data/sky_segmentation_unet_model.pth
+data/street_view

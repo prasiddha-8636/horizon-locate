@@ -503,6 +503,7 @@ def cmd_evaluate(args):
     
     top1_correct, top5_correct = 0, 0
     errors = []
+    failed_sample_ids = []
     
     for sample_id in tqdm(sample_ids, desc="Matching"):
         # 1. Try to load mask directly using key as filename (handles real-world hash IDs)
