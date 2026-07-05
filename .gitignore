@@ -8,5 +8,4 @@ data/clouds
 data/digital_elevation_model
 data/geopose3k
 data/satellite_imagery
-data/sky_segmentation_unet_model.pth
 data/street_view
