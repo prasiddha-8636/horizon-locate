@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
 """
-Generate the Horizon Database from DEM using HORAYZON
-======================================================
+Generate the Horizon Database and Viewpoint Mapping from DEM using HORAYZON
+=============================================================================
 
-This script raycasts from 4,920 viewpoints (82×60 grid, 500m spacing) on the Khumbu DEM
+This script raycasts from viewpoints on the Khumbu DEM
 and generates three horizon databases at different search radii:
   - Global:     80 km (coarse matching)
   - Local:      15 km (medium matching)
   - Restricted: 3 km (fine matching)
 
-Output files:
-  - data/digital_elevation_model/digital_elevation_model/horizon_database/global.npy (4920 × 1440)
-  - data/digital_elevation_model/digital_elevation_model/horizon_database/local.npy (4920 × 1440)
-  - data/digital_elevation_model/horizon_database/restricted.npy (4920 × 1440)
+And saves the coordinate mapping lookup table:
+  - data/digital_elevation_model/viewpoints_mapping.npy (4920 × 4)
 
-Each row = horizon profile from one viewpoint
+Each row in viewpoints_mapping.npy = [lat, lon, utm_x, utm_y]
+Each row in the horizon databases = horizon profile from that viewpoint
 Each column = elevation angle at 0.25° azimuth resolution (0-359.75°)
-
-RUNTIME: 2-6 hours on GPU (Colab T4), depends on accuracy settings
-MEMORY: ~4 GB
-
-USAGE:
-  python generate_horizons_from_dem.py
 """
 
 import os
@@ -82,23 +75,25 @@ def validate_inputs():
 
 
 def create_output_dir():
-    """Create data directory if needed."""
-    os.makedirs("data", exist_ok=True)
+    """Create data directories if needed."""
+    os.makedirs("data/digital_elevation_model/horizon_database", exist_ok=True)
 
 
 # ============================================================================
-# BUILD VIEWPOINT GRID
+# BUILD VIEWPOINT GRID & MAPPING
 # ============================================================================
 
 def build_viewpoint_grid():
     """
-    Build the current 4,920-viewpoint grid matching the existing horizon DB and mapping.
+    Build the viewpoint grid and mapping table.
     
     Returns:
-        viewpoints: (4920, 3) array [x_utm, y_utm, z_dem]
-        Y_v, X_v: Grid coordinates
+        view_xs_ys: (N, 2) array [x_utm, y_utm]
+        viewpoints_mapping: (N, 4) array [lat, lon, x_utm, y_utm]
+        Y_v, X_v: Grid dimensions
     """
     gps_to_utm = Transformer.from_crs(GPS_CRS, UTM_ZONE, always_xy=True)
+    utm_to_gps = Transformer.from_crs(UTM_ZONE, GPS_CRS, always_xy=True)
     
     # Convert GPS bounds to UTM
     min_x, min_y = gps_to_utm.transform(KHUMBU_BOUNDS_GPS['min_lon'], KHUMBU_BOUNDS_GPS['min_lat'])
@@ -117,25 +112,36 @@ def build_viewpoint_grid():
     print(f"  Y: {len(Y_v)} rows")
     print(f"  Total: {len(Y_v) * len(X_v)} viewpoints")
     
-    # Create meshgrid
-    view_xs, view_ys = np.meshgrid(X_v, Y_v)
-    view_xs_ys = np.column_stack((view_xs.ravel(), view_ys.ravel())).astype(np.float32)
+    # Create meshgrid matching the index layout of unified_evaluation_pipeline.py
+    view_xs, view_ys = np.meshgrid(X_v, Y_v, indexing='xy')
+    flat_xs = view_xs.ravel(order='C')
+    flat_ys = view_ys.ravel(order='C')
     
-    return view_xs_ys, Y_v, X_v
+    # Generate GPS lat/lons for the viewpoints mapping file
+    lons, lats = utm_to_gps.transform(flat_xs, flat_ys)
+    viewpoints_mapping = np.column_stack((lats, lons, flat_xs, flat_ys)).astype(np.float32)
+    view_xs_ys = np.column_stack((flat_xs, flat_ys)).astype(np.float32)
+    
+    return view_xs_ys, viewpoints_mapping, Y_v, X_v
 
 
 def sample_dem_at_viewpoints(view_xs_ys):
     """
-    Sample DEM elevations at viewpoint locations.
-    
-    Args:
-        view_xs_ys: (N, 2) array of [utm_x, utm_y] coordinates
-    
-    Returns:
-        viewpoints: (N, 3) array of [utm_x, utm_y, dem_z]
+    Sample DEM elevations at viewpoint locations with nodata-cleaning.
     """
     with rasterio.open(DEM_PATH) as src:
         dem_data = src.read(1).astype(np.float32)
+        
+        # Clean invalid NaN/Inf/Nodata values to prevent camera-in-a-pit artifacts
+        dem_data = np.nan_to_num(dem_data, nan=0.0, posinf=0.0, neginf=0.0)
+        valid_mask = dem_data > 10.0
+        if np.any(valid_mask):
+            min_valid = float(np.min(dem_data[valid_mask]))
+            dem_data[~valid_mask] = min_valid
+        else:
+            dem_data[~valid_mask] = 1000.0
+        dem_data = np.clip(dem_data, 100.0, 9000.0)
+
         [pixel_width, _, start_x, _, pixel_height, start_y] = src.transform[:6]
         raw_ys = start_y + np.arange(src.height) * pixel_height
         
@@ -164,17 +170,23 @@ def sample_dem_at_viewpoints(view_xs_ys):
     
     return viewpoints
 
-
 def build_terrain_mesh():
     """
-    Build HORAYZON terrain mesh from DEM.
-    
-    Returns:
-        vert_grid: Rearranged DEM buffer for HORAYZON
-        height, width: DEM dimensions
+    Build HORAYZON terrain mesh from DEM with nodata-cleaning.
     """
     with rasterio.open(DEM_PATH) as src:
         dem_data = src.read(1).astype(np.float32)
+        
+        # Clean invalid NaN/Inf/Nodata values identically to preserve geometry scale
+        dem_data = np.nan_to_num(dem_data, nan=0.0, posinf=0.0, neginf=0.0)
+        valid_mask = dem_data > 10.0
+        if np.any(valid_mask):
+            min_valid = float(np.min(dem_data[valid_mask]))
+            dem_data[~valid_mask] = min_valid
+        else:
+            dem_data[~valid_mask] = 1000.0
+        dem_data = np.clip(dem_data, 100.0, 9000.0)
+
         [pixel_width, _, start_x, _, pixel_height, start_y] = src.transform[:6]
         
         xs = start_x + np.arange(src.width) * pixel_width
@@ -197,23 +209,13 @@ def build_terrain_mesh():
     
     return vert_grid, height, width, dem_data
 
-
 # ============================================================================
 # RAYCAST HORIZONS
 # ============================================================================
 
 def compute_horizons(vert_grid, height, width, viewpoints, max_search_radius_km):
     """
-    Raycast horizon angles from all viewpoints using HORAYZON.
-    
-    Args:
-        vert_grid: HORAYZON terrain mesh
-        height, width: DEM dimensions
-        viewpoints: (N, 3) array of [utm_x, utm_y, dem_z]
-        max_search_radius_km: Search radius in km
-    
-    Returns:
-        horizon_angles: (N, 1440) array of elevation angles in degrees
+    Raycast horizon angles and distances from all viewpoints using HORAYZON.
     """
     num_viewpoints = viewpoints.shape[0]
     
@@ -238,7 +240,6 @@ def compute_horizons(vert_grid, height, width, viewpoints, max_search_radius_km)
     start_time = time.time()
     
     # Run HORAYZON horizon detection
-    # Note: Newer versions of HORAYZON return 2 values instead of 3
     result = hray.horizon.horizon_locations(
         vert_grid,                    # 3D terrain model
         height,                       # DEM height
@@ -250,32 +251,33 @@ def compute_horizons(vert_grid, height, width, viewpoints, max_search_radius_km)
         azim_num=NUM_RAYS,
         hori_acc=VERTICAL_ACCURACY,
         ray_org_elev=ray_org_elev,
-        hori_dist_out=False,          # Don't compute distance (just angles)
+        hori_dist_out=True,          # Enable distance-to-horizon calculations
         elev_ang_low_lim=-89
     )
     
-    # Handle both old (3 return values) and new (2 return values) API
+    # Handle return values (with distances)
     if isinstance(result, tuple):
         if len(result) == 3:
-            horizon_elevation_angles, _, _ = result
+            horizon_elevation_angles, horizon_distances, _ = result
         elif len(result) == 2:
-            horizon_elevation_angles, _ = result
+            horizon_elevation_angles, horizon_distances = result
         else:
             raise ValueError(f"Unexpected number of return values: {len(result)}")
     else:
-        horizon_elevation_angles = result
+        raise TypeError("Expected a tuple of return values when hori_dist_out=True")
     
     elapsed = time.time() - start_time
     print(f"  ✓ Raycast complete in {elapsed:.1f}s")
     
-    # Convert radians to degrees
+    # Calculate and print the average visible distance to the horizon
+    avg_distance_km = np.mean(horizon_distances) / 1000.0
+    max_distance_km = np.max(horizon_distances) / 1000.0
+    print(f"  ✓ Average visible distance to horizon: {avg_distance_km:.2f} km")
+    print(f"  ✓ Maximum visible distance to horizon: {max_distance_km:.2f} km")    
+
     horizon_angles = np.degrees(horizon_elevation_angles)
     
-    print(f"  Output shape: {horizon_angles.shape}")
-    print(f"  Value range: [{horizon_angles.min():.2f}°, {horizon_angles.max():.2f}°]")
-    
     return horizon_angles
-
 
 # ============================================================================
 # MAIN
@@ -289,16 +291,21 @@ def main():
     validate_inputs()
     create_output_dir()
     
-    # Step 1: Build viewpoint grid
-    print("\n[1/5] Building viewpoint grid...")
-    view_xs_ys, Y_v, X_v = build_viewpoint_grid()
+    # Step 1: Build viewpoint grid & mapping table
+    print("\n[1/5] Building viewpoint coordinate grid and mapping table...")
+    view_xs_ys, viewpoints_mapping, Y_v, X_v = build_viewpoint_grid()
+    
+    # Save viewpoints_mapping.npy alongside the database
+    mapping_path = "data/digital_elevation_model/viewpoints_mapping.npy"
+    np.save(mapping_path, viewpoints_mapping)
+    print(f"  ✓ Saved coordinate index mapping to {mapping_path}")
     
     # Step 2: Sample DEM at viewpoints
-    print("\n[2/5] Sampling DEM at viewpoint locations...")
+    print("\n[2/5] Sampling DEM at viewpoint coordinates...")
     viewpoints = sample_dem_at_viewpoints(view_xs_ys)
     
-    # Step 3: Build terrain mesh
-    print("\n[3/5] Building terrain mesh...")
+    # Step 3: Load DEM geometry
+    print("\n[3/5] Loading DEM terrain mesh...")
     vert_grid, height, width, dem_data = build_terrain_mesh()
     
     # Step 4: Raycast horizons for each tier
@@ -310,33 +317,31 @@ def main():
             vert_grid, height, width, viewpoints, search_radius_km
         )
         
-        # Save to disk
+        # Save databases
         output_path = f"data/digital_elevation_model/horizon_database/{tier_name}.npy"
         np.save(output_path, horizon_angles)
         
         file_size_mb = os.path.getsize(output_path) / (1024**2)
-        print(f"  ✓ Saved to {output_path} ({file_size_mb:.1f} MB)")
+        print(f"  ✓ Saved database to {output_path} ({file_size_mb:.1f} MB)")
     
     # Step 5: Verify outputs
-    print("\n[5/5] Verifying outputs...")
+    print("\n[5/5] Verifying outputs on disk...")
+    # Verify mapping table
+    if os.path.exists(mapping_path):
+        map_data = np.load(mapping_path)
+        print(f"  ✓ viewpoints_mapping : {map_data.shape} → {map_data.dtype}")
+    # Verify database tiers
     for tier_name in MAX_SEARCH_RADII.keys():
         path = f"data/digital_elevation_model/horizon_database/{tier_name}.npy"
         if os.path.exists(path):
             data = np.load(path)
-            print(f"  ✓ {tier_name:12s}: {data.shape} → {data.dtype}")
+            print(f"  ✓ {tier_name:18s} : {data.shape} → {data.dtype}")
         else:
-            print(f"  ✗ {tier_name:12s}: MISSING")
+            print(f"  ✗ {tier_name:18s} : MISSING")
     
     print("\n" + "="*70)
-    print("✓ HORIZON DATABASE GENERATION COMPLETE")
+    print("✓ HORIZON DATABASE & MAPPING GENERATION COMPLETE")
     print("="*70)
-    print("""
-Next steps:
-  1. Download all data/digital_elevation_model/horizon_database/*.npy files to your local machine
-  2. Place in data/ directory
-  3. Run: python unified_evaluation_pipeline.py --mode diagnose
-  4. Run: python unified_evaluation_pipeline.py --mode evaluate --limit 50
-""")
 
 
 if __name__ == "__main__":

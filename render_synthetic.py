@@ -8,6 +8,7 @@ import pyrender
 import trimesh
 import math
 import cv2
+import time
 
 os.environ['PYRENDER_BACKEND'] = 'egl'
 
@@ -68,7 +69,7 @@ else:
     center_x = 478712.0
     center_y = 3086932.0
 
-crop_size_x, crop_size_y = 110000.0, 110000.0
+crop_size_x, crop_size_y = 200000.0, 190000.0
 
 # Extract 1D boolean masks indicating which columns/rows contain valid mountain data
 valid_cols = np.any(valid_mask, axis=0)
@@ -257,7 +258,7 @@ peak_indices = np.where(dem_data_final > 6000.0)
 if len(peak_indices[0]) == 0:
     peak_indices = np.where(dem_data_final > 5000.0)
 
-def generate_sample_render(sample_id, config):
+def generate_sample_render(sample_id, config, renderer):
     scene = pyrender.Scene(ambient_light=config["ambient_light"])
     scene.add(pyrender_mesh)
     scene.add(pyrender_skirt_mesh)
@@ -266,12 +267,11 @@ def generate_sample_render(sample_id, config):
     scene.add(sun_light, pose=config["sun_pose"])
     
     # znear/zfar ratio optimized to eliminate Z-fighting
-    camera = pyrender.PerspectiveCamera(yfov=np.radians(config["fov_y_deg"]), aspectRatio=1.5, znear=5.0, zfar=120000.0)
+    camera = pyrender.PerspectiveCamera(yfov=np.radians(config["fov_y_deg"]), aspectRatio=1.5, znear=5.0, zfar=80000.0)
     scene.add(camera, pose=config["cam_pose_render"])
     
-    renderer = pyrender.OffscreenRenderer(img_w, img_h)
+    # Reuse the persistent renderer instead of recreating it
     raw_color, depth = renderer.render(scene)
-    renderer.delete()
     
     sky_mask = depth == 0.0
 
@@ -441,6 +441,10 @@ print("Beginning procedural generation loop...")
 
 metadata_dict = {}
 viewpoint_step = max(1, viewpoints_mapping.shape[0] // TOTAL_SAMPLES)
+
+renderer = pyrender.OffscreenRenderer(img_w, img_h)
+
+loop_start_time = time.time()
 
 for sample_id in range(TOTAL_SAMPLES):
     img_filename = f"sample_{sample_id:04d}.png"
@@ -643,7 +647,7 @@ for sample_id in range(TOTAL_SAMPLES):
         config["sun_img_y"] = int(img_h * rng.uniform(0.10, 0.35))
         
         try:
-            final_img, final_mask = generate_sample_render(sample_id, config)
+            final_img, final_mask = generate_sample_render(sample_id, config, renderer)
             
             mask_arr = np.array(final_mask) # Shape: (720, 1080)
             
@@ -701,7 +705,15 @@ for sample_id in range(TOTAL_SAMPLES):
                 "cam_R_tilt": R_tilt.tolist()
             }
             render_successful = True
+            
+            # Calculate elapsed time, average speed, and estimated remaining minutes
+            elapsed_time = time.time() - loop_start_time
+            avg_time_per_sample = elapsed_time / (sample_id + 1)
+            est_remaining_sec = avg_time_per_sample * (TOTAL_SAMPLES - (sample_id + 1))
+            est_remaining_min = est_remaining_sec / 60.0
+            
             print(f"✓ Sample {sample_id} rendered successfully on attempt {attempts}.")
+            print(f"  Time elapsed: {elapsed_time/60.0:.1f} min | Est. remaining: {est_remaining_min:.1f} min ({avg_time_per_sample:.1f}s/sample)")
         except ValueError:
             target_vp_idx = rng.integers(0, viewpoints_mapping.shape[0])
         except Exception as e:
@@ -710,6 +722,8 @@ for sample_id in range(TOTAL_SAMPLES):
             traceback.print_exc()
             import sys
             sys.exit(1)
+
+renderer.delete()
 
 gt_json_path = "data/synthetic_dataset/ground_truth.json"
 with open(gt_json_path, "w") as f:
