@@ -174,6 +174,15 @@ def extract_elevation_profile(mask_path, fov_y_deg=65.0, aspect_ratio=None, r_ti
         else:
             skyline_pixels[col] = H - 1
 
+    # Filter out real-world structural occlusions (trees, poles, buildings)
+    skyline_pixels_2d = skyline_pixels.reshape(1, -1).astype(np.float32)
+    skyline_pixels_cleaned = cv2.morphologyEx(
+        skyline_pixels_2d, 
+        cv2.MORPH_CLOSE, 
+        cv2.getStructuringElement(cv2.MORPH_RECT, (15, 1))
+    ).ravel()
+    skyline_pixels = np.maximum(skyline_pixels.astype(np.float32), skyline_pixels_cleaned)
+
     # 1D Median Filter to remove single-column spikes
     skyline_pixels = cv2.medianBlur(skyline_pixels.astype(np.float32), 5).ravel()
 
@@ -185,7 +194,7 @@ def extract_elevation_profile(mask_path, fov_y_deg=65.0, aspect_ratio=None, r_ti
     kernel /= kernel.sum()
     
     pad_width = size // 2
-    padded_pixels = np.pad(skyline_pixels, pad_width, mode='edge')
+    padded_pixels = np.pad(skyline_pixels, pad_width, mode='reflect')
     skyline_pixels = np.convolve(padded_pixels, kernel, mode='valid')
     
     x_c, y_c = W / 2.0, H / 2.0
@@ -319,7 +328,7 @@ def run_sliding_fft_for_db(db, query_profile, feature="combined", expected_offse
             corr_deriv = _compute_z_norm_corr(np.hstack([db_deriv, db_deriv[:m-1]]), q_deriv, m, N)
             corr_curv = _compute_z_norm_corr(np.hstack([db_curv, db_curv[:m-1]]), q_curv, m, N)
 
-            weights = np.array([0.50, 0.35, 0.15], dtype=np.float64)
+            weights = np.array([0.30, 0.65, 0.05], dtype=np.float64)
             corr_norm = weights[0] * corr_raw + weights[1] * corr_deriv + weights[2] * corr_curv
         else:
             raise ValueError(f"Unknown feature type: {feature}")
@@ -380,16 +389,14 @@ def run_three_tier_search_opt(db_global, db_local, db_restricted, query_profile,
     final_results = []
     dbs = [db_global, db_local, db_restricted]
     
-    # Scale-invariant normalization (3D Descriptor: Profile, Slope, Curvature)
+    # Robust 2D Descriptor: Normalized Profile and Slope
     q_norm = query_profile - np.mean(query_profile)
     q_std = np.std(q_norm) + 1e-12
     q_norm_scaled = q_norm / q_std
     q_deriv = np.gradient(q_norm_scaled)
     q_deriv /= (np.std(q_deriv) + 1e-12)
-    q_curv = np.gradient(q_deriv)
-    q_curv /= (np.std(q_curv) + 1e-12)
-    q_desc = np.vstack((q_norm_scaled, q_deriv, q_curv)).T
-    
+    q_desc = np.vstack((q_norm_scaled, q_deriv)).T    
+
     for idx in top_candidates:
         winning_tier_idx = best_tier_per_viewpoint[idx]
         active_db = dbs[winning_tier_idx]
@@ -403,9 +410,7 @@ def run_three_tier_search_opt(db_global, db_local, db_restricted, query_profile,
         db_sub_norm_scaled = db_sub_norm / db_sub_std
         db_deriv = np.gradient(db_sub_norm_scaled)
         db_deriv /= (np.std(db_deriv) + 1e-12)
-        db_curv = np.gradient(db_deriv)
-        db_curv /= (np.std(db_curv) + 1e-12)
-        db_desc = np.vstack((db_sub_norm_scaled, db_deriv, db_curv)).T        
+        db_desc = np.vstack((db_sub_norm_scaled, db_deriv)).T
 
         # Adaptively scale the warping window based on query sequence length (FOV)
         adapted_window = max(dtw_window, int(0.03 * m))
@@ -455,17 +460,40 @@ def process_single_sample(sample_id, gt_info, viewpoints_mapping, vp_elevations,
         valid_vp_mask = None
     else:
         if "eye_z_m" in gt_info:
+            # Synthetic query path
             gt_ground_z = gt_info["eye_z_m"] - gt_info.get("query_height_m", QUERY_MIN_HEIGHT_M)
+            tolerance = args.altimetric_tolerance * 3.5  # Wider tolerance for synthetic blurred grid shifts
         else:
+            # Real-world coordinate query path
             from pyproj import Transformer
             gps_to_utm = Transformer.from_crs(GPS_CRS, UTM_ZONE, always_xy=True)
             true_utm_x, true_utm_y = gps_to_utm.transform(true_lon, true_lat)
-            ix = np.clip(np.argmin(np.abs(xs_final - true_utm_x)), 0, dem_data_final.shape[1] - 1)
-            iy = np.clip(np.argmin(np.abs(ys_final - true_utm_y)), 0, dem_data_final.shape[0] - 1)
-            gt_ground_z = float(dem_data_final[iy, ix])
+            
+            dx = xs_final[1] - xs_final[0]
+            dy = ys_final[1] - ys_final[0]
+            dem_height, dem_width = dem_data_final.shape
+            
+            i_frac = (true_utm_x - xs_final[0]) / dx
+            j_frac = (true_utm_y - ys_final[0]) / dy
+            
+            i0 = int(np.clip(np.floor(i_frac), 0, dem_width - 2))
+            i1 = i0 + 1
+            j0 = int(np.clip(np.floor(j_frac), 0, dem_height - 2))
+            j1 = j0 + 1
+            
+            tx = np.clip(i_frac - i0, 0.0, 1.0)
+            ty = np.clip(j_frac - j0, 0.0, 1.0)
+            
+            z00 = dem_data_final[j0, i0]
+            z10 = dem_data_final[j0, i1]
+            z01 = dem_data_final[j1, i0]
+            z11 = dem_data_final[j1, i1]
+            
+            gt_ground_z = (1.0 - tx) * (1.0 - ty) * z00 + tx * (1.0 - ty) * z10 + (1.0 - tx) * ty * z01 + tx * ty * z11
+            tolerance = args.altimetric_tolerance  # Standard tolerance for real GPS measurements
 
-        valid_vp_mask = np.abs(vp_elevations - gt_ground_z) <= args.altimetric_tolerance
-    
+        valid_vp_mask = np.abs(vp_elevations - gt_ground_z) <= tolerance    
+
     r_tilt = gt_info.get("cam_R_tilt", None)
     if r_tilt is not None:
         r_tilt = np.array(r_tilt, dtype=np.float32)
@@ -546,15 +574,34 @@ def cmd_evaluate(args):
     
     gps_to_utm = Transformer.from_crs(GPS_CRS, UTM_ZONE, always_xy=True)
 
-    # Cache elevations for all viewpoints
+    # Cache elevations for all viewpoints using bilinear interpolation
     vp_elevations = np.zeros(viewpoints_mapping.shape[0], dtype=np.float32)
+    dx = xs_final[1] - xs_final[0]
+    dy = ys_final[1] - ys_final[0]
+    dem_height, dem_width = dem_data_final.shape
+
     for i in range(viewpoints_mapping.shape[0]):
         vp_x = viewpoints_mapping[i, 2]
         vp_y = viewpoints_mapping[i, 3]
-        ix = np.clip(np.argmin(np.abs(xs_final - vp_x)), 0, dem_data_final.shape[1] - 1)
-        iy = np.clip(np.argmin(np.abs(ys_final - vp_y)), 0, dem_data_final.shape[0] - 1)
-        vp_elevations[i] = dem_data_final[iy, ix]
         
+        i_frac = (vp_x - xs_final[0]) / dx
+        j_frac = (vp_y - ys_final[0]) / dy
+        
+        i0 = int(np.clip(np.floor(i_frac), 0, dem_width - 2))
+        i1 = i0 + 1
+        j0 = int(np.clip(np.floor(j_frac), 0, dem_height - 2))
+        j1 = j0 + 1
+        
+        tx = np.clip(i_frac - i0, 0.0, 1.0)
+        ty = np.clip(j_frac - j0, 0.0, 1.0)
+        
+        z00 = dem_data_final[j0, i0]
+        z10 = dem_data_final[j0, i1]
+        z01 = dem_data_final[j1, i0]
+        z11 = dem_data_final[j1, i1]
+        
+        vp_elevations[i] = (1.0 - tx) * (1.0 - ty) * z00 + tx * (1.0 - ty) * z10 + (1.0 - tx) * ty * z01 + tx * ty * z11        
+
     print(f"Preloading database tiers...")
     db_global = np.load("data/digital_elevation_model/horizon_database/global.npy")
     db_local = np.load("data/digital_elevation_model/horizon_database/local.npy")
@@ -663,6 +710,9 @@ def cmd_evaluate(args):
     print(f"  Top-5 Accuracy (1000m):           {top5_acc:.2f}%")
     print(f"  Median Position Error:            {median_err:.1f} m")
     print("="*60)
+
+    # Save raw errors to disk so the Jupyter Notebook can load them for plotting
+    np.save("temp_errors.npy", errors)
 
 
 def cmd_diagnose(args):
@@ -825,6 +875,8 @@ def cmd_visualize(args):
     axes[2].grid(True, alpha=0.3)
 
     plt.tight_layout()
+    plt.savefig(os.path.join("output", "visualize.png"))
+    print("Saved to output/visualize.png")
     plt.show()
 
 

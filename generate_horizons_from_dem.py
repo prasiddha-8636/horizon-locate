@@ -247,7 +247,7 @@ def compute_horizons(vert_grid, height, width, viewpoints, max_search_radius_km)
         viewpoints,                   # Viewpoint locations
         vec_up,                       # Reference for elevation (zenith)
         vec_north,                    # Reference for azimuth (north)
-        dist_search=max_search_radius_km,
+        dist_search=max_search_radius_km*1000,
         azim_num=NUM_RAYS,
         hori_acc=VERTICAL_ACCURACY,
         ray_org_elev=ray_org_elev,
@@ -274,9 +274,8 @@ def compute_horizons(vert_grid, height, width, viewpoints, max_search_radius_km)
     max_distance_km = np.max(horizon_distances) / 1000.0
     print(f"  ✓ Average visible distance to horizon: {avg_distance_km:.2f} km")
     print(f"  ✓ Maximum visible distance to horizon: {max_distance_km:.2f} km")    
-
+ 
     horizon_angles = np.degrees(horizon_elevation_angles)
-    
     return horizon_angles
 
 # ============================================================================
