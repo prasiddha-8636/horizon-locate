@@ -1,11 +1,40 @@
-__pycache__
-HORAYZON
-.ipynb_checkpoints
-.virtual_documents
-lessons.md
+# ====================================================================
+# 1. Heavy Datasets & GIS Data (Saves ~66 GB)
+# ====================================================================
+data/geopose3k/
+data/digital_elevation_model/
+data/street_view/
+data/synthetic_dataset/
+data/satellite_imagery/
+data/clouds/
+
+# Ignore any model checkpoints in the root data folder
+data/*.pth
+
+# ====================================================================
+# 2. Pipeline Outputs & Temp Files (Saves ~1 GB)
+# ====================================================================
 tmp/
-data/clouds
-data/digital_elevation_model
-data/geopose3k
-data/satellite_imagery
-data/street_view
+notebooks/01_RegionStudy/output/
+notebooks/02_SkylineDatabase/output/
+notebooks/*/output/
+
+# ====================================================================
+# 3. IDE, Jupyter & OS Metadata
+# ====================================================================
+.ipynb_checkpoints/
+.virtual_documents/
+.DS_Store
+Thumbs.db
+
+# ====================================================================
+# 4. Python/C++ Build Artifacts & Virtual Environments
+# ====================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+HORAYZON/build/
+HORAYZON/dist/
+venv/
+env/
