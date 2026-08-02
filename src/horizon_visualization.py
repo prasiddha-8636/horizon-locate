@@ -1,4 +1,5 @@
 """Memory-efficient horizon visualization explorer with aligned camera optics and pitch."""
+
 from pathlib import Path
 import os
 import gc
@@ -9,6 +10,7 @@ import pandas as pd
 import rasterio
 from pyproj import Transformer
 import pyarrow.parquet as pq
+from src.horizon_format import decode_horizon_uint8
 import ipywidgets as widgets
 from IPython.display import display, clear_output
 from PIL import Image
@@ -18,12 +20,24 @@ from src.mountain_engine import MountainEngine
 
 def skyline_dataset_paths(root, mode="coarse"):
     root = Path(root)
-    
+
     return {
         "dem_file": root / "data" / "digital_elevation_model" / "dem_30m.tif",
-        "db_file": root / "notebooks" / "02_SkylineDatabase" / "output" / "skyline_db.parquet",
-        "mesh_file": root / "notebooks" / "02_SkylineDatabase" / "output" / "terrain_mesh.npy",
-        "meta_file": root / "notebooks" / "02_SkylineDatabase" / "output" / "terrain_meta.json",
+        "db_file": root
+        / "notebooks"
+        / "02_SkylineDatabase"
+        / "output"
+        / "skyline_db.parquet",
+        "mesh_file": root
+        / "notebooks"
+        / "02_SkylineDatabase"
+        / "output"
+        / "terrain_mesh.npy",
+        "meta_file": root
+        / "notebooks"
+        / "02_SkylineDatabase"
+        / "output"
+        / "terrain_meta.json",
     }
 
 
@@ -38,12 +52,18 @@ class SkylineHorizonExplorer:
         self.parquet_file = pq.ParquetFile(self.db_file)
         schema = self.parquet_file.schema.to_arrow_schema()
         self.columns_in_file = schema.names
-        
+
         # Determine coordinate elevation column name
-        elev_col = "elevation_m" if "elevation_m" in self.columns_in_file else "elevation"
-        
+        elev_col = (
+            "elevation_m" if "elevation_m" in self.columns_in_file else "elevation"
+        )
+
         # Read only light metadata columns
-        self.df = self.parquet_file.read(columns=["lon", "lat", elev_col]).to_pandas().reset_index(drop=True)
+        self.df = (
+            self.parquet_file.read(columns=["lon", "lat", elev_col])
+            .to_pandas()
+            .reset_index(drop=True)
+        )
         self.df["coeff_1"] = self.df[elev_col]  # Fallback visualization coefficient
 
         with rasterio.open(self.dem_file) as src:
@@ -95,7 +115,7 @@ class SkylineHorizonExplorer:
         cumulative_rows = 0
         target_row_group = 0
         row_offset_in_group = 0
-        
+
         for rg_idx in range(self.parquet_file.num_row_groups):
             num_rows_in_rg = self.parquet_file.metadata.row_group(rg_idx).num_rows
             if cumulative_rows <= int(sample_idx) < cumulative_rows + num_rows_in_rg:
@@ -105,7 +125,9 @@ class SkylineHorizonExplorer:
             cumulative_rows += num_rows_in_rg
 
         # Lazily load only that single Row Group from disk
-        single_rg_table = self.parquet_file.read_row_group(target_row_group, columns=["raw_horizon_deg", "raw_azimuth_deg"])
+        single_rg_table = self.parquet_file.read_row_group(
+            target_row_group, columns=["raw_horizon_deg", "raw_azimuth_deg"]
+        )
         row = single_rg_table.to_pandas().iloc[row_offset_in_group]
 
         img = None
@@ -123,7 +145,10 @@ class SkylineHorizonExplorer:
                     render_width=int(render_w),
                     render_height=int(render_h),
                     crop_center_xy=(tx, ty),
-                    crop_radius_m=float(look_distance_km) * 1000.0 / np.cos(np.deg2rad(cam_fov_deg / 2)) * 2.0
+                    crop_radius_m=float(look_distance_km)
+                    * 1000.0
+                    / np.cos(np.deg2rad(cam_fov_deg / 2))
+                    * 2.0,
                 )
                 img = engine.get_render_first_person(
                     eye_xy=(tx, ty),
@@ -141,13 +166,17 @@ class SkylineHorizonExplorer:
                 img = None
 
         has_raw_horizon = "raw_horizon_deg" in self.columns_in_file
-        raw_curve = np.array(row["raw_horizon_deg"], dtype=np.float32) if has_raw_horizon else None
-        
+        raw_curve = (
+            decode_horizon_uint8(row["raw_horizon_deg"]) if has_raw_horizon else None
+        )
+
         has_raw_azimuth = "raw_azimuth_deg" in self.columns_in_file
         if has_raw_azimuth:
             azim_deg = np.array(row["raw_azimuth_deg"], dtype=np.float32)
         elif has_raw_horizon:
-            azim_deg = np.linspace(0.0, 360.0, len(raw_curve), endpoint=False, dtype=np.float32)
+            azim_deg = np.linspace(
+                0.0, 360.0, len(raw_curve), endpoint=False, dtype=np.float32
+            )
         else:
             azim_deg = None
 
@@ -158,7 +187,9 @@ class SkylineHorizonExplorer:
 
         if img is not None:
             axes[0].imshow(img)
-            axes[0].set_title(f"First-person render (az={cam_azimuth_deg:.0f}°, hfov={cam_fov_deg:.0f}°)")
+            axes[0].set_title(
+                f"First-person render (az={cam_azimuth_deg:.0f}°, hfov={cam_fov_deg:.0f}°)"
+            )
             axes[0].axis("off")
 
         if has_raw_horizon:
@@ -169,11 +200,20 @@ class SkylineHorizonExplorer:
             axes[1].set_xlim(0.0, 360.0)
 
             if img is not None:
-                self._draw_camera_fov(axes[1], cam_azimuth_deg, cam_pitch_deg, cam_fov_deg, render_w, render_h, azim_deg, raw_curve)
+                self._draw_camera_fov(
+                    axes[1],
+                    cam_azimuth_deg,
+                    cam_pitch_deg,
+                    cam_fov_deg,
+                    render_w,
+                    render_h,
+                    azim_deg,
+                    raw_curve,
+                )
         else:
-            axes[1].text(0.5, 0.5, "No Horizon Curve Stored", ha='center', va='center')
+            axes[1].text(0.5, 0.5, "No Horizon Curve Stored", ha="center", va="center")
             axes[1].set_title("Horizon Curve Missing")
-            
+
         axes[1].grid(alpha=0.3)
 
         im = axes[2].imshow(
@@ -200,15 +240,19 @@ class SkylineHorizonExplorer:
         plt.close(fig)
 
     @staticmethod
-    def _draw_camera_fov(ax, center_az, center_pitch, fov_deg, render_w, render_h, azim_deg, raw_curve):
+    def _draw_camera_fov(
+        ax, center_az, center_pitch, fov_deg, render_w, render_h, azim_deg, raw_curve
+    ):
         """Draws the camera viewport box using robust data coordinates centered on camera pitch."""
         lo = center_az - fov_deg / 2.0
         hi = center_az + fov_deg / 2.0
 
         # Calculate exact vertical FOV from the horizontal FOV based on render aspect ratio
         aspect_ratio = float(render_w) / float(render_h)
-        vfov_deg = np.degrees(2.0 * np.arctan(np.tan(np.radians(fov_deg) / 2.0) / aspect_ratio))
-        
+        vfov_deg = np.degrees(
+            2.0 * np.arctan(np.tan(np.radians(fov_deg) / 2.0) / aspect_ratio)
+        )
+
         # Center the box vertically at the exact physical pitch angle of the camera
         elo, ehi = center_pitch - vfov_deg / 2.0, center_pitch + vfov_deg / 2.0
 
@@ -218,7 +262,7 @@ class SkylineHorizonExplorer:
             ax.plot([l, r], [ehi, ehi], color="darkorange", lw=1.8, zorder=3)
             ax.plot([l, l], [elo, ehi], color="darkorange", lw=1.8, zorder=3)
             ax.plot([r, r], [elo, ehi], color="darkorange", lw=1.8, zorder=3)
-            
+
             # Fill the viewport interior
             ax.fill_between([l, r], elo, ehi, color="orange", alpha=0.12, zorder=1)
 
@@ -239,38 +283,71 @@ class SkylineHorizonExplorer:
     def interactive_widget(self):
         # Define clean, standard sliders
         sliders = {
-            "sample_idx": widgets.IntSlider(min=0, max=len(self.df) - 1, step=1, value=0, description="Index"),
-            "cam_azimuth_deg": widgets.FloatSlider(min=0.0, max=359.0, step=5.0, value=35.0, description="Heading (°)"),
-            "cam_pitch_deg": widgets.FloatSlider(min=-45.0, max=45.0, step=2.0, value=0.0, description="Pitch (°)"),
-            "cam_fov_deg": widgets.FloatSlider(min=20.0, max=120.0, step=5.0, value=60.0, description="FOV (°)"),
-            "look_distance_km": widgets.FloatSlider(min=1.0, max=15.0, step=1.0, value=5.0, description="Distance (km)"),
-            "eye_height_m": widgets.FloatSlider(min=1.0, max=3.0, step=0.1, value=1.6, description="Eye Height (m)"),
-            "mesh_stride": widgets.IntSlider(min=1, max=10, step=1, value=2, description="Mesh Stride"),
-            "render_3d": widgets.Checkbox(value=True, description="Render 3D Mesh Preview"),
+            "sample_idx": widgets.IntSlider(
+                min=0, max=len(self.df) - 1, step=1, value=0, description="Index"
+            ),
+            "cam_azimuth_deg": widgets.FloatSlider(
+                min=0.0, max=359.0, step=5.0, value=35.0, description="Heading (°)"
+            ),
+            "cam_pitch_deg": widgets.FloatSlider(
+                min=-45.0, max=45.0, step=2.0, value=0.0, description="Pitch (°)"
+            ),
+            "cam_fov_deg": widgets.FloatSlider(
+                min=20.0, max=120.0, step=5.0, value=60.0, description="FOV (°)"
+            ),
+            "look_distance_km": widgets.FloatSlider(
+                min=1.0, max=15.0, step=1.0, value=5.0, description="Distance (km)"
+            ),
+            "eye_height_m": widgets.FloatSlider(
+                min=1.0, max=3.0, step=0.1, value=1.6, description="Eye Height (m)"
+            ),
+            "mesh_stride": widgets.IntSlider(
+                min=1, max=10, step=1, value=2, description="Mesh Stride"
+            ),
+            "render_3d": widgets.Checkbox(
+                value=True, description="Render 3D Mesh Preview"
+            ),
         }
 
         # Format layout boxes to group controls logically into columns
-        col_position = widgets.VBox([
-            widgets.HTML("<h4><b>[ 1. Viewpoint ]</b></h4>"),
-            sliders["sample_idx"],
-            sliders["eye_height_m"]
-        ], layout=widgets.Layout(padding='10px', border='1px solid #ccc', margin='5px', width='32%'))
+        col_position = widgets.VBox(
+            [
+                widgets.HTML("<h4><b>[ 1. Viewpoint ]</b></h4>"),
+                sliders["sample_idx"],
+                sliders["eye_height_m"],
+            ],
+            layout=widgets.Layout(
+                padding="10px", border="1px solid #ccc", margin="5px", width="32%"
+            ),
+        )
 
-        col_camera = widgets.VBox([
-            widgets.HTML("<h4><b>[ 2. Camera Navigation ]</b></h4>"),
-            sliders["cam_azimuth_deg"],
-            sliders["cam_pitch_deg"],
-            sliders["cam_fov_deg"]
-        ], layout=widgets.Layout(padding='10px', border='1px solid #ccc', margin='5px', width='36%'))
+        col_camera = widgets.VBox(
+            [
+                widgets.HTML("<h4><b>[ 2. Camera Navigation ]</b></h4>"),
+                sliders["cam_azimuth_deg"],
+                sliders["cam_pitch_deg"],
+                sliders["cam_fov_deg"],
+            ],
+            layout=widgets.Layout(
+                padding="10px", border="1px solid #ccc", margin="5px", width="36%"
+            ),
+        )
 
-        col_render = widgets.VBox([
-            widgets.HTML("<h4><b>[ 3. Quality Settings ]</b></h4>"),
-            sliders["look_distance_km"],
-            sliders["mesh_stride"],
-            sliders["render_3d"]
-        ], layout=widgets.Layout(padding='10px', border='1px solid #ccc', margin='5px', width='32%'))
+        col_render = widgets.VBox(
+            [
+                widgets.HTML("<h4><b>[ 3. Quality Settings ]</b></h4>"),
+                sliders["look_distance_km"],
+                sliders["mesh_stride"],
+                sliders["render_3d"],
+            ],
+            layout=widgets.Layout(
+                padding="10px", border="1px solid #ccc", margin="5px", width="32%"
+            ),
+        )
 
-        control_panel = widgets.HBox([col_position, col_camera, col_render], layout=widgets.Layout(width='100%'))
+        control_panel = widgets.HBox(
+            [col_position, col_camera, col_render], layout=widgets.Layout(width="100%")
+        )
 
         out = widgets.Output()
 
@@ -289,17 +366,20 @@ class SkylineHorizonExplorer:
 
 def plot_synthetic_samples(images_dir, masks_dir):
     """
-    Renders an interactive side-by-side plot panel in the notebook 
+    Renders an interactive side-by-side plot panel in the notebook
     to visually traverse and verify generated query images and sky masks.
     """
     images_dir = Path(images_dir)
     masks_dir = Path(masks_dir)
-    
+
     # Count generated files dynamically
-    sample_files = sorted([
-        f for f in os.listdir(images_dir) 
-        if f.lower().endswith(".png") and f.startswith("sample_")
-    ])
+    sample_files = sorted(
+        [
+            f
+            for f in os.listdir(images_dir)
+            if f.lower().endswith(".png") and f.startswith("sample_")
+        ]
+    )
     max_samples = len(sample_files)
 
     if max_samples == 0:
@@ -308,22 +388,22 @@ def plot_synthetic_samples(images_dir, masks_dir):
 
     # Define simple, clean selection slider
     sample_slider = widgets.IntSlider(
-        min=0, 
-        max=max_samples - 1, 
-        step=1, 
-        value=0, 
+        min=0,
+        max=max_samples - 1,
+        step=1,
+        value=0,
         description="Sample ID",
-        layout=widgets.Layout(width="50%")
+        layout=widgets.Layout(width="50%"),
     )
 
     out = widgets.Output()
 
     def display_sample(change):
         sample_id = change if isinstance(change, int) else change["new"]
-        
+
         img_path = images_dir / f"sample_{sample_id:04d}.png"
         mask_path = masks_dir / f"sample_{sample_id:04d}.png"
-        
+
         if not img_path.exists() or not mask_path.exists():
             with out:
                 clear_output(wait=True)
@@ -332,19 +412,27 @@ def plot_synthetic_samples(images_dir, masks_dir):
 
         img = Image.open(img_path)
         mask = Image.open(mask_path)
-        
+
         with out:
             clear_output(wait=True)
             fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-            
+
             axes[0].imshow(img)
-            axes[0].set_title(f"Generated Query View (ID: {sample_id})", fontsize=11, fontweight='bold')
-            axes[0].axis('off')
-            
-            axes[1].imshow(mask, cmap='gray')
-            axes[1].set_title("Generated Sky Mask\n(Terrain=255/White, Sky=0/Black)", fontsize=11, fontweight='bold')
-            axes[1].axis('off')
-            
+            axes[0].set_title(
+                f"Generated Query View (ID: {sample_id})",
+                fontsize=11,
+                fontweight="bold",
+            )
+            axes[0].axis("off")
+
+            axes[1].imshow(mask, cmap="gray")
+            axes[1].set_title(
+                "Generated Sky Mask\n(Terrain=255/White, Sky=0/Black)",
+                fontsize=11,
+                fontweight="bold",
+            )
+            axes[1].axis("off")
+
             plt.tight_layout()
             plt.show()
             plt.close(fig)
