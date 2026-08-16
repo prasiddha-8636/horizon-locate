@@ -114,7 +114,7 @@ class SyntheticSceneGenerator:
             tl = i
             tr = (i + 1) % P
             bl = P + i
-            br = P + ((i + 1) % p_len if 'p_len' in locals() else (i + 1) % P)
+            br = P + ((i + 1) % P)
             skirt_faces.extend([[tl, bl, tr], [tr, bl, br], [tl, tr, bl], [tr, br, bl]])
 
         skirt_mesh = trimesh.Trimesh(vertices=skirt_verts, faces=np.array(skirt_faces), process=False, validate=False)
