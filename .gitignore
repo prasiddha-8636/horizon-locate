@@ -1,26 +1,23 @@
 # ====================================================================
-# 1. Heavy Datasets & GIS Data (Saves ~66 GB)
+# 1. ALL data/ contents (large, copyrighted, or regenerable)
 # ====================================================================
-data/geopose3k/
-data/digital_elevation_model/
-data/street_view/
-data/synthetic_dataset/
-data/satellite_imagery/
-data/clouds/
-
-# Ignore any model checkpoints in the root data folder
-data/*.pth
+data/
 
 # ====================================================================
-# 2. Pipeline Outputs & Temp Files (Saves ~1 GB)
+# 2. Third-party (built locally)
 # ====================================================================
-tmp/
-notebooks/01_RegionStudy/output/
-notebooks/02_SkylineDatabase/output/
-notebooks/*/output/
+HORAYZON/build/
+HORAYZON/dist/
+HORAYZON/
 
 # ====================================================================
-# 3. IDE, Jupyter & OS Metadata
+# 3. Archive caches
+# ====================================================================
+archive/*/__pycache__/
+archive/*/*/__pycache__/
+
+# ====================================================================
+# 4. IDE, Jupyter & OS metadata
 # ====================================================================
 .ipynb_checkpoints/
 .virtual_documents/
@@ -28,13 +25,28 @@ notebooks/*/output/
 Thumbs.db
 
 # ====================================================================
-# 4. Python/C++ Build Artifacts & Virtual Environments
+# 5. Python build artifacts, caches & logs
 # ====================================================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
-HORAYZON/build/
-HORAYZON/dist/
 venv/
 env/
+.pytest_cache/
+.ruff_cache/
+*.log
+
+.env
+
+# ====================================================================
+# 6. Large archive directories (datasets, backups, eval caches)
+# ====================================================================
+archive/dashboards/
+archive/data_db_backup/
+archive/data_eval/
+archive/results_archive/
+archive/synthetic_dataset/
+archive/synthetic_results/
+archive/test_segmentation/
+notebooks/*/output/

@@ -24,8 +24,6 @@ dependencies:
   - scikit-image
   - rasterio
   - trimesh
-  - matplotlib
-  - pyproj
   - opencv
   - seaborn
   - dem_stitcher
@@ -34,6 +32,17 @@ dependencies:
   - torchvision
   - segmentation_models_pytorch
   - pyrender
-  - pillow
   - ctypes
   - timm
+  - fastdtw
+  - pyprojroot
+  - pandas
+  - pyarrow
+  - ipywidgets
+  - earthaccess
+  - geopy
+  - gdal
+  - scikit-learn
+  - pip
+  - pip:
+    - albumentations
